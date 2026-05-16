@@ -321,3 +321,71 @@ def add_risk_score(df: pd.DataFrame) -> pd.DataFrame:
     ).clip(0, 1)
 
     return df_with_score
+
+
+def add_predicted_risk_norm_feature(df: pd.DataFrame) -> pd.DataFrame:
+    """Add normalized ML-predicted log-scale risk.
+
+    ``predicted_max_risk_estimate`` is a log-scale risk estimate predicted by
+    the ML model. Higher values, meaning values closer to zero, indicate
+    higher predicted risk. ``predicted_risk_norm`` maps those predictions to a
+    0-1 score for the ML-based recommendation layer.
+    """
+    required_columns = {"predicted_max_risk_estimate"}
+    missing_columns = required_columns.difference(df.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"Missing required column(s): {missing}")
+    if "predicted_risk_norm" in df.columns:
+        raise ValueError("Column already exists: predicted_risk_norm")
+
+    df_with_predicted_risk = df.copy()
+
+    min_predicted_risk = df_with_predicted_risk[
+        "predicted_max_risk_estimate"
+    ].min()
+    max_predicted_risk = df_with_predicted_risk[
+        "predicted_max_risk_estimate"
+    ].max()
+    if max_predicted_risk == min_predicted_risk:
+        df_with_predicted_risk["predicted_risk_norm"] = 0.0
+    else:
+        df_with_predicted_risk["predicted_risk_norm"] = (
+            df_with_predicted_risk["predicted_max_risk_estimate"]
+            - min_predicted_risk
+        ) / (max_predicted_risk - min_predicted_risk)
+
+    return df_with_predicted_risk
+
+
+def add_ml_risk_score(df: pd.DataFrame) -> pd.DataFrame:
+    """Add an ML-based conjunction severity score.
+
+    ``ml_risk_score`` uses the same weights as the original ``risk_score``,
+    but replaces the dataset-risk feature with ``predicted_risk_norm`` from
+    the trained ML risk prediction model.
+    """
+    required_columns = {
+        "predicted_risk_norm",
+        "distance_risk",
+        "urgency",
+        "relative_speed_norm",
+        "mission_priority",
+    }
+    missing_columns = required_columns.difference(df.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"Missing required column(s): {missing}")
+    if "ml_risk_score" in df.columns:
+        raise ValueError("Column already exists: ml_risk_score")
+
+    df_with_ml_score = df.copy()
+    df_with_ml_score["ml_risk_score"] = (
+        0.35 * df_with_ml_score["predicted_risk_norm"]
+        + 0.25 * df_with_ml_score["distance_risk"]
+        + 0.20 * df_with_ml_score["urgency"]
+        + 0.10 * df_with_ml_score["relative_speed_norm"]
+        + 0.10 * df_with_ml_score["mission_priority"]
+    ).clip(0, 1)
+
+    return df_with_ml_score

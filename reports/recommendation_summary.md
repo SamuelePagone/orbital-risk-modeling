@@ -2,7 +2,7 @@
 
 ## Dataset overview
 - Number of events: 13143
-- Number of columns: 20
+- Number of columns: 28
 
 ## Recommendation distribution
 | recommended_action | count |
@@ -49,3 +49,15 @@
 | 7 | 0.4353 | 0.7981 | 0.5 | 0.3906 | 0.9765 | 0.4293 | 0.4465 | monitor |
 | 8 | 0.7345 | 0.8091 | 1.0 | 0.0 | 0.5447 | 0.6826 | 0.7769 | major_maneuver |
 | 9 | 0.7121 | 0.8923 | 1.0 | 0.0031 | 0.5807 | 0.661 | 0.7533 | major_maneuver |
+
+## ML recommendation comparison
+Distribution of `ml_recommended_action`:
+| ml_recommended_action | count |
+| --- | --- |
+| monitor | 8163 |
+| major_maneuver | 4269 |
+| small_maneuver | 709 |
+| no_action | 2 |
+
+- Matching recommendations: 8108
+- Matching recommendation percentage: 61.6906%

@@ -172,6 +172,12 @@ The pipeline generates the following outputs:
 - `reports/recommendation_validation.md`  
   Validation report checking whether the recommendations are coherent with the scoring logic.
 
+- `reports/model_evaluation.md`  
+  Report with ML regression metrics for predicting `max_risk_estimate`.
+
+- `outputs/models/risk_prediction_model.joblib`  
+  Saved fitted `RandomForestRegressor` pipeline.
+
 - `outputs/figures/`  
   Static example encounter plots for the four recommendation classes.
 
@@ -249,33 +255,74 @@ Average feature values by recommendation are:
 
 These values show that the recommender is coherent and explainable. Low-risk cases are associated with `no_action`, intermediate cases are mostly assigned to `monitor`, and higher-risk cases are assigned to maneuver actions.
 
-## 11. Limitations
+## 11. Machine Learning Risk Prediction Module
+
+The project includes a machine learning risk-prediction module in `src/modeling.py`. This module is a regression model that predicts `max_risk_estimate`.
+
+The ML model does not predict the final recommended action directly. Final actions are still produced by the explainable rule-based recommendation layer.
+
+Risk-derived columns and recommendation-output columns were excluded from the ML input features to avoid data leakage.
+
+The target variable is:
+
+- `max_risk_estimate`
+
+The input features are:
+
+- `time_to_tca`
+- `miss_distance`
+- `relative_speed`
+- `relative_position_r`
+- `relative_position_t`
+- `relative_position_n`
+- `relative_velocity_r`
+- `relative_velocity_t`
+- `relative_velocity_n`
+- `mahalanobis_distance`
+- `mission_id`
+- `c_object_type`
+
+The baseline model is a `DummyRegressor`, and the main model is a `RandomForestRegressor`.
+
+| Model | MAE | RMSE | R2 |
+| --- | --- | --- | --- |
+| `DummyRegressor` | 0.8350 | 1.0488 | -0.0002 |
+| `RandomForestRegressor` | 0.3802 | 0.5213 | 0.7529 |
+
+The `RandomForestRegressor` significantly outperforms the `DummyRegressor` baseline. Its lower MAE and RMSE show smaller prediction errors, and its R2 value of 0.7529 means the model explains about 75% of the variance in `max_risk_estimate` on the test set.
+
+The model predicts a dataset risk estimate, not real operator decisions. Operational deployment would still require expert validation.
+
+## 12. Limitations
 
 This project has several limitations:
 
-- It is a rule-based system, not a trained machine learning model.
+- The recommendation layer is rule-based and manually designed.
+- The ML model predicts a dataset risk estimate, not real operator decisions.
 - `fuel_cost` and `mission_priority` are synthetic assumptions.
 - Real operational deployment would require validated thresholds, real maneuver cost, satellite constraints, and expert review.
 - The score weights are manually designed and tuned.
 - The system does not simulate orbital maneuvers.
 - The system does not predict actual collision outcomes, but supports decision making.
 
-## 12. Future work
+## 13. Future work
 
 Possible improvements include:
 
 - Use real mission-priority metadata if available.
 - Estimate maneuver cost using real delta-v calculations.
 - Validate scoring rules with expert-labeled decisions.
-- Add machine learning models for risk classification or recommendation learning.
+- Extend machine learning models for risk classification or recommendation learning.
 - Add visual dashboards.
 - Include uncertainty-aware analysis using covariance features.
 - Compare rule-based recommendations with historical operator decisions.
 
-## 13. Conclusion
+## 14. Conclusion
 
 This project successfully builds an explainable decision-support recommendation system for satellite collision avoidance.
 
-The system transforms raw conjunction data into event-level recommendations and produces reproducible tabular outputs, reports, and visual examples of representative conjunction scenarios. It combines risk indicators, operational urgency, encounter geometry, synthetic decision-support assumptions, and action scoring into a transparent pipeline.
+The system transforms raw conjunction data into event-level recommendations and produces reproducible tabular outputs, reports, and visual examples of representative conjunction scenarios. It combines risk indicators, operational urgency, encounter geometry, synthetic decision-support assumptions, action scoring, and ML risk prediction into a transparent pipeline.
+
+The project now includes both an ML risk prediction module and an explainable recommendation layer. The ML model predicts `max_risk_estimate`, while the rule-based recommendation layer produces the final `recommended_action`.
 
 The final prototype is suitable as a first complete, interpretable version of a satellite collision avoidance recommendation system.

@@ -2,7 +2,18 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.recommender import add_action_scores, add_recommended_action
+from src.modeling import (
+    add_ml_risk_predictions,
+    create_model_evaluation_report,
+    save_model,
+    train_risk_prediction_models,
+)
+from src.recommender import (
+    add_action_scores,
+    add_ml_action_scores,
+    add_ml_recommended_action,
+    add_recommended_action,
+)
 from src.reporting import (
     create_recommendation_summary_report,
     create_recommendation_validation_report,
@@ -10,8 +21,10 @@ from src.reporting import (
 from src.preprocessing import (
     add_normalized_risk_feature,
     add_normalized_velocity_feature,
+    add_ml_risk_score,
     add_operational_risk_features,
     add_probability_features,
+    add_predicted_risk_norm_feature,
     add_risk_score,
     add_synthetic_decision_features,
     create_event_level_dataset,
@@ -27,6 +40,9 @@ RECOMMENDATIONS_OUTPUT_PATH = RECOMMENDATIONS_OUTPUT_DIR / "recommendations.csv"
 REPORT_OUTPUT_PATH = Path("reports/recommendation_summary.md")
 VALIDATION_REPORT_OUTPUT_PATH = Path("reports/recommendation_validation.md")
 FIGURES_OUTPUT_DIR = Path("outputs/figures")
+MODEL_OUTPUT_DIR = Path("outputs/models")
+MODEL_OUTPUT_PATH = MODEL_OUTPUT_DIR / "risk_prediction_model.joblib"
+MODEL_EVALUATION_REPORT_PATH = Path("reports/model_evaluation.md")
 
 RECOMMENDATION_COLUMNS = [
     "event_id",
@@ -49,6 +65,14 @@ RECOMMENDATION_COLUMNS = [
     "small_maneuver_score",
     "major_maneuver_score",
     "recommended_action",
+    "predicted_max_risk_estimate",
+    "predicted_risk_norm",
+    "ml_risk_score",
+    "ml_no_action_score",
+    "ml_monitor_score",
+    "ml_small_maneuver_score",
+    "ml_major_maneuver_score",
+    "ml_recommended_action",
 ]
 
 
@@ -63,7 +87,24 @@ def main() -> None:
     synthetic_df = add_synthetic_decision_features(risk_df)
     scored_df = add_risk_score(synthetic_df)
     action_scores_df = add_action_scores(scored_df)
-    final_df = add_recommended_action(action_scores_df)
+    baseline_df = add_recommended_action(action_scores_df)
+    modeling_results = train_risk_prediction_models(baseline_df)
+    ml_prediction_df = add_ml_risk_predictions(
+        baseline_df,
+        modeling_results["random_forest_pipeline"],
+    )
+    ml_prediction_df = add_predicted_risk_norm_feature(ml_prediction_df)
+    ml_scored_df = add_ml_risk_score(ml_prediction_df)
+    ml_action_scores_df = add_ml_action_scores(ml_scored_df)
+    final_df = add_ml_recommended_action(ml_action_scores_df)
+    create_model_evaluation_report(
+        results=modeling_results,
+        output_path=MODEL_EVALUATION_REPORT_PATH,
+    )
+    save_model(
+        results=modeling_results,
+        output_path=MODEL_OUTPUT_PATH,
+    )
     create_example_event_plots(
         recommendations_df=final_df,
         output_dir=FIGURES_OUTPUT_DIR,
@@ -85,11 +126,18 @@ def main() -> None:
     final_df.to_csv(EVENT_LEVEL_OUTPUT_PATH, index=False)
     recommendations_df.to_csv(RECOMMENDATIONS_OUTPUT_PATH, index=False)
 
+    ml_distribution = final_df["ml_recommended_action"].value_counts()
+    matching_recommendations = (
+        final_df["recommended_action"] == final_df["ml_recommended_action"]
+    )
+    match_percentage = matching_recommendations.mean() * 100
+
     print(f"Original dataset shape: {original_df.shape}")
     print(f"Event-level dataset shape: {event_level_df.shape}")
     print(f"Dataset shape after risk score: {scored_df.shape}")
     print(f"Dataset shape after action scores: {action_scores_df.shape}")
-    print(f"Final dataset shape after recommended action: {final_df.shape}")
+    print(f"Baseline dataset shape after recommended action: {baseline_df.shape}")
+    print(f"Final dataset shape after ML-based recommendation columns: {final_df.shape}")
     print(f"Clean recommendations shape: {recommendations_df.shape}")
     print(f"Full dataset output path: {EVENT_LEVEL_OUTPUT_PATH}")
     print(f"Clean recommendations output path: {RECOMMENDATIONS_OUTPUT_PATH}")
@@ -99,7 +147,19 @@ def main() -> None:
         f"{VALIDATION_REPORT_OUTPUT_PATH}"
     )
     print(f"Figures output directory path: {FIGURES_OUTPUT_DIR}")
+    print(f"Model evaluation report output path: {MODEL_EVALUATION_REPORT_PATH}")
+    print(f"Saved model output path: {MODEL_OUTPUT_PATH}")
+    print("ML model predicts max_risk_estimate, not the final recommended action.")
+    print("recommended_action is the original rule-based baseline.")
+    print("ml_recommended_action is based on ML-predicted risk.")
+    print(f"Model metrics: {modeling_results['metrics']}")
+    print(f"ML recommendation distribution: {ml_distribution.to_dict()}")
+    print(
+        "Rule-based / ML recommendation match percentage: "
+        f"{match_percentage:.4f}%"
+    )
     print("Added column: recommended_action")
+    print("Added column: ml_recommended_action")
 
 
 if __name__ == "__main__":

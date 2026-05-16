@@ -38,6 +38,7 @@ The main pipeline performs these steps:
 - Save full dataset
 - Save clean recommendations file
 - Generate summary and validation reports
+- Train and evaluate the ML risk-prediction model
 
 ## Engineered features
 
@@ -70,6 +71,32 @@ If two or more actions have exactly the same highest score, ties are resolved by
 no_action -> monitor -> small_maneuver -> major_maneuver
 ```
 
+## Machine Learning risk prediction
+
+The project also includes an ML regression module in `src/modeling.py`. This module predicts `max_risk_estimate` from physical and orbital conjunction-event features. It does not predict the final recommended action directly; final actions are still produced by the explainable rule-based recommendation layer.
+
+Input features used by the ML model are:
+
+- `time_to_tca`
+- `miss_distance`
+- `relative_speed`
+- `relative_position_r`
+- `relative_position_t`
+- `relative_position_n`
+- `relative_velocity_r`
+- `relative_velocity_t`
+- `relative_velocity_n`
+- `mahalanobis_distance`
+- `mission_id`
+- `c_object_type`
+
+The module evaluates a `DummyRegressor` baseline and a `RandomForestRegressor` main model.
+
+| Model | MAE | RMSE | R2 |
+| --- | --- | --- | --- |
+| `DummyRegressor` | 0.8350 | 1.0488 | -0.0002 |
+| `RandomForestRegressor` | 0.3802 | 0.5213 | 0.7529 |
+
 ## Outputs
 
 - `outputs/tables/event_level_data.csv`  
@@ -83,6 +110,12 @@ no_action -> monitor -> small_maneuver -> major_maneuver
 
 - `reports/recommendation_validation.md`  
   Validation report checking coherence of recommendations.
+
+- `reports/model_evaluation.md`  
+  Report with ML regression metrics.
+
+- `outputs/models/risk_prediction_model.joblib`  
+  Saved fitted `RandomForestRegressor` pipeline.
 
 - `outputs/figures/`  
   Example static encounter plots, one for each available recommended action.
@@ -114,7 +147,8 @@ python3 main.py
 
 ## Notes and assumptions
 
-- This is a rule-based recommendation system, not a trained machine learning model.
+- The project includes both ML risk prediction and an explainable rule-based recommendation layer.
+- The ML model predicts `max_risk_estimate`, not the final recommended action.
 - `fuel_cost` and `mission_priority` are synthetic assumptions.
 - The system is intended as a decision-support prototype.
 - The original dataset is not modified.

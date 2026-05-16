@@ -103,6 +103,34 @@ def create_recommendation_summary_report(
     ]
     example_recommendations = report_df[example_columns].head(10)
 
+    ml_comparison_content = []
+    ml_comparison_columns = {"recommended_action", "ml_recommended_action"}
+    if ml_comparison_columns.issubset(report_df.columns):
+        ml_action_counts = (
+            report_df["ml_recommended_action"]
+            .value_counts()
+            .rename_axis("ml_recommended_action")
+            .reset_index(name="count")
+        )
+        matching_recommendations = (
+            report_df["recommended_action"] == report_df["ml_recommended_action"]
+        )
+        match_count = int(matching_recommendations.sum())
+        match_percentage = (
+            float(matching_recommendations.mean() * 100)
+            if len(report_df) > 0
+            else 0.0
+        )
+        ml_comparison_content = [
+            "",
+            "## ML recommendation comparison",
+            "Distribution of `ml_recommended_action`:",
+            _format_markdown_table(ml_action_counts),
+            "",
+            f"- Matching recommendations: {match_count}",
+            f"- Matching recommendation percentage: {match_percentage:.4f}%",
+        ]
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     content = [
@@ -126,6 +154,7 @@ def create_recommendation_summary_report(
         "",
         "## Example recommendations",
         _format_markdown_table(example_recommendations),
+        *ml_comparison_content,
         "",
     ]
 
