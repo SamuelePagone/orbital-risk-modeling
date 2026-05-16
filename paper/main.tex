@@ -1,0 +1,575 @@
+\documentclass[12pt,a4paper]{article}
+
+% =========================
+% Pacchetti
+% =========================
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[italian]{babel}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{longtable}
+
+% =========================
+% Impostazioni pagina
+% =========================
+\geometry{margin=2.5cm}
+\onehalfspacing
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    urlcolor=blue,
+    citecolor=black
+}
+
+% =========================
+% Titolo
+% =========================
+\title{\textbf{Sistema di Raccomandazione per la Collision Avoidance Satellitare}\\
+\large Supporto Decisionale Spiegabile per Eventi di Conjunction Spaziale}
+
+\author{Samuele Pagone}
+
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Questo progetto sviluppa un sistema di raccomandazione spiegabile per il supporto decisionale nella collision avoidance satellitare. Il sistema analizza eventi di conjunction, cioè situazioni in cui un satellite target o un oggetto spaziale principale può avvicinarsi pericolosamente a un oggetto secondario, come un detrito spaziale, un satellite non operativo o un altro spacecraft. A partire dai dati degli eventi, il progetto costruisce un dataset a livello evento, crea feature legate al rischio e alla decisione operativa, calcola un punteggio globale di rischio, assegna uno score alle possibili azioni e raccomanda una tra quattro azioni: \texttt{no\_action}, \texttt{monitor}, \texttt{small\_maneuver} e \texttt{major\_maneuver}. La versione attuale combina un modulo di Machine Learning per la predizione del rischio con un recommendation layer rule-based e spiegabile. Il modello predittivo stima \texttt{max\_risk\_estimate}, mentre il recommendation layer trasforma rischio, distanza, urgenza, costo sintetico e priorità missione in una raccomandazione operativa.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% =========================
+\section{Introduzione}
+% =========================
+
+Gli eventi di conjunction satellitare si verificano quando due oggetti spaziali sono previsti passare a una distanza ravvicinata tra loro. In un contesto operativo, uno dei due oggetti è solitamente il target, cioè il satellite o l'oggetto principale da proteggere, mentre l'altro è il chaser o oggetto secondario, che può essere un detrito spaziale, un satellite non operativo o un altro satellite attivo.
+
+Quando viene rilevato un possibile evento di conjunction, gli operatori devono decidere se non fare nulla, continuare a monitorare l'evento oppure effettuare una manovra di collision avoidance. Questa decisione non è banale, perché una manovra non necessaria può consumare carburante, interrompere la pianificazione della missione e introdurre complessità operative. Al contrario, una risposta tardiva o insufficiente può aumentare il rischio di collisione.
+
+Lo scopo di questo progetto è costruire un sistema di raccomandazione per supportare questa decisione. Il sistema non si limita a stimare il rischio, ma trasforma indicatori fisici e operativi in una raccomandazione finale.
+
+% =========================
+\section{Obiettivo del progetto}
+% =========================
+
+L'obiettivo del progetto è raccomandare una tra quattro possibili azioni operative per ogni evento di conjunction:
+
+\begin{itemize}
+    \item \texttt{no\_action}
+    \item \texttt{monitor}
+    \item \texttt{small\_maneuver}
+    \item \texttt{major\_maneuver}
+\end{itemize}
+
+Il sistema è pensato come un recommendation system spiegabile. Questo significa che ogni raccomandazione deriva da feature costruite esplicitamente, da punteggi interpretabili e da una logica decisionale trasparente.
+
+La raccomandazione è destinata agli operatori di missione o a un flusso di supporto decisionale. Non deve essere interpretata come un comando autonomo inviato direttamente al satellite.
+
+% =========================
+\section{Descrizione del dataset}
+% =========================
+
+Il dataset principale utilizzato nel progetto è:
+
+\begin{verbatim}
+dataset/data/kelvins_competition_data/train_data.csv
+\end{verbatim}
+
+Il dataset originale contiene:
+
+\begin{itemize}
+    \item 162.634 righe
+    \item 103 colonne
+\end{itemize}
+
+Il dataset contiene più osservazioni temporali per lo stesso \texttt{event\_id}. Questo significa che un singolo evento di conjunction può comparire più volte, con diversi valori di \texttt{time\_to\_tca} e con informazioni aggiornate sul rischio o sullo stato dell'evento.
+
+I principali gruppi di variabili sono:
+
+\begin{itemize}
+    \item \texttt{event\_id}: identifica un evento di conjunction.
+    \item \texttt{time\_to\_tca}: indica il tempo rimanente al closest approach.
+    \item \texttt{risk} e \texttt{max\_risk\_estimate}: rappresentano informazioni sul rischio di collisione in forma logaritmica.
+    \item \texttt{miss\_distance}: rappresenta la distanza minima prevista tra i due oggetti.
+    \item \texttt{relative\_speed}: rappresenta la velocità relativa tra i due oggetti.
+    \item colonne con prefisso \texttt{t\_}: descrivono il target object.
+    \item colonne con prefisso \texttt{c\_}: descrivono il chaser object o oggetto secondario.
+    \item colonne di posizione e velocità relativa: descrivono la geometria e il moto relativo dell'incontro tra i due oggetti.
+\end{itemize}
+
+Ogni riga finale a livello evento rappresenta quindi un incontro tra un oggetto target e un oggetto secondario, non lo stato di un singolo satellite isolato.
+
+\subsection{Nota sulle unità di misura}
+
+I file disponibili nel progetto non definiscono esplicitamente tutte le unità di misura fisiche. Di conseguenza, variabili come \texttt{miss\_distance}, \texttt{relative\_speed}, \texttt{time\_to\_tca} e le componenti di posizione relativa vengono interpretate nelle unità originali del dataset.
+
+La logica di raccomandazione si basa principalmente su valori normalizzati e confronti relativi, senza assumere unità fisiche specifiche.
+
+% =========================
+\section{Preprocessing a livello evento}
+% =========================
+
+Il dataset originale non può essere usato direttamente come se ogni riga corrispondesse a una raccomandazione, perché lo stesso \texttt{event\_id} può apparire più volte. Nella prima versione del progetto, l'obiettivo è produrre una sola raccomandazione per ogni evento.
+
+Per questo motivo, il progetto crea un dataset a livello evento selezionando, per ogni \texttt{event\_id}, la riga con il valore più piccolo non negativo di \texttt{time\_to\_tca}.
+
+Questa regola permette di mantenere l'osservazione più vicina possibile al momento critico, ma ancora prima o al massimo al closest approach. I valori negativi di \texttt{time\_to\_tca} vengono esclusi perché indicano osservazioni probabilmente successive al momento di massimo avvicinamento.
+
+Il dataset a livello evento contiene:
+
+\begin{itemize}
+    \item 13.143 eventi
+\end{itemize}
+
+Questa trasformazione è importante perché il sistema deve rispondere alla domanda:
+
+\begin{quote}
+Dato un evento di conjunction, quale azione deve essere raccomandata?
+\end{quote}
+
+% =========================
+\section{Feature engineering}
+% =========================
+
+Il progetto crea diverse feature ingegnerizzate per rendere la logica di raccomandazione interpretabile e utile dal punto di vista operativo.
+
+\subsection{Feature di probabilità}
+
+Le colonne originali \texttt{risk} e \texttt{max\_risk\_estimate} sembrano essere rappresentate in scala logaritmica in base 10. Questo significa che valori più vicini a zero indicano una probabilità di collisione più alta.
+
+Vengono quindi create le seguenti feature:
+
+\begin{verbatim}
+collision_probability = 10 ** risk
+max_collision_probability = 10 ** max_risk_estimate
+\end{verbatim}
+
+Queste feature rendono i valori di rischio più interpretabili, mantenendo comunque le colonne originali per tracciabilità.
+
+\subsection{Feature operative di rischio}
+
+Vengono create due feature operative:
+
+\begin{itemize}
+    \item \texttt{distance\_risk}
+    \item \texttt{urgency}
+\end{itemize}
+
+\texttt{distance\_risk} è una normalizzazione invertita di \texttt{miss\_distance}. Poiché una distanza minima più bassa indica un avvicinamento più critico, valori minori di \texttt{miss\_distance} producono valori più alti di \texttt{distance\_risk}.
+
+\texttt{urgency} è una normalizzazione invertita di \texttt{time\_to\_tca}. Poiché un valore più basso di \texttt{time\_to\_tca} significa che manca meno tempo al closest approach, valori minori producono una maggiore urgenza.
+
+\subsection{Feature normalizzata di velocità}
+
+La feature \texttt{relative\_speed\_norm} viene creata normalizzando \texttt{relative\_speed} nell'intervallo da 0 a 1.
+
+Questo passaggio è necessario perché i valori originali della velocità relativa sono numericamente molto più grandi delle altre feature normalizzate. La normalizzazione permette alla velocità di contribuire allo score senza dominare le altre variabili.
+
+\subsection{Feature normalizzata di rischio}
+
+La feature \texttt{risk\_norm} converte il rischio originale in scala logaritmica in uno score compreso tra 0 e 1:
+
+\begin{itemize}
+    \item valori vicini a 0 indicano rischio più basso;
+    \item valori vicini a 1 indicano rischio più alto.
+\end{itemize}
+
+Questo rende l'indicatore principale di rischio compatibile con le altre feature normalizzate.
+
+\subsection{Feature decisionali sintetiche}
+
+Il dataset originale non contiene valori espliciti per costo carburante, delta-v o priorità della missione. Tuttavia, questi concetti sono importanti per costruire un sistema di supporto decisionale più realistico.
+
+Per questo motivo, il progetto crea due feature sintetiche:
+
+\begin{itemize}
+    \item \texttt{fuel\_cost}
+    \item \texttt{mission\_priority}
+\end{itemize}
+
+La feature sintetica \texttt{fuel\_cost} è definita come:
+
+\begin{verbatim}
+fuel_cost = 0.6 * relative_speed_norm + 0.4 * urgency
+\end{verbatim}
+
+Questa feature rappresenta un proxy della complessità operativa della manovra. Eventi con alta velocità relativa e alta urgenza vengono considerati più costosi o complessi dal punto di vista operativo.
+
+La feature sintetica \texttt{mission\_priority} viene derivata deterministicamente da \texttt{mission\_id}. Produce valori tra 0.5 e 1.0 per simulare diversi livelli di importanza della missione.
+
+Sia \texttt{fuel\_cost} sia \texttt{mission\_priority} sono assunzioni progettuali e non misure operative reali.
+
+% =========================
+\section{Costruzione del risk score}
+% =========================
+
+Il \texttt{risk\_score} rappresenta la severità complessiva dell'evento di conjunction. Combina rischio fisico, distanza, urgenza, velocità relativa e priorità della missione.
+
+La formula utilizzata è:
+
+\[
+\text{risk\_score} =
+0.35 \cdot \text{risk\_norm}
++ 0.25 \cdot \text{distance\_risk}
++ 0.20 \cdot \text{urgency}
++ 0.10 \cdot \text{relative\_speed\_norm}
++ 0.10 \cdot \text{mission\_priority}
+\]
+
+La feature \texttt{fuel\_cost} non viene inclusa nel \texttt{risk\_score}. Il costo carburante non aumenta la severità fisica dell'evento, ma influenza la desiderabilità delle possibili azioni. Per questo viene usato successivamente nello scoring delle azioni.
+
+I pesi sono stati progettati nel seguente modo:
+
+\begin{itemize}
+    \item \texttt{risk\_norm} ha il peso maggiore perché rappresenta direttamente il rischio di collisione.
+    \item \texttt{distance\_risk} è importante perché avvicinamenti più stretti sono più pericolosi.
+    \item \texttt{urgency} conta perché meno tempo al TCA implica maggiore pressione operativa.
+    \item \texttt{relative\_speed\_norm} contribuisce alla severità dell'incontro.
+    \item \texttt{mission\_priority} aggiunge l'importanza operativa della missione.
+\end{itemize}
+
+% =========================
+\section{Action scoring e logica di raccomandazione}
+% =========================
+
+Dopo aver calcolato il \texttt{risk\_score}, il sistema assegna uno score a ciascuna possibile azione:
+
+\begin{itemize}
+    \item \texttt{no\_action\_score}
+    \item \texttt{monitor\_score}
+    \item \texttt{small\_maneuver\_score}
+    \item \texttt{major\_maneuver\_score}
+\end{itemize}
+
+La logica attesa è la seguente:
+
+\begin{itemize}
+    \item \texttt{no\_action} è favorita quando il rischio è basso.
+    \item \texttt{monitor} è favorita per eventi a rischio intermedio.
+    \item \texttt{small\_maneuver} è favorita per casi a rischio medio-alto.
+    \item \texttt{major\_maneuver} è riservata a casi più severi, soprattutto quando la priorità della missione è alta.
+\end{itemize}
+
+La raccomandazione finale, \texttt{recommended\_action}, è selezionata come l'azione con lo score più alto.
+
+In caso di pareggio esatto tra due o più azioni, viene scelta l'azione meno aggressiva secondo questo ordine:
+
+\begin{verbatim}
+no_action -> monitor -> small_maneuver -> major_maneuver
+\end{verbatim}
+
+Questa regola conservativa evita manovre non necessarie quando due azioni risultano ugualmente adatte.
+
+% =========================
+\section{Modulo di Machine Learning per la predizione del rischio}
+% =========================
+
+Oltre al recommendation system spiegabile, il progetto include un modulo di Machine Learning per la predizione del rischio.
+
+Il modulo si trova nel file:
+
+\begin{verbatim}
+src/modeling.py
+\end{verbatim}
+
+L'obiettivo del modello non è predire direttamente l'azione finale, perché il dataset non contiene decisioni reali degli operatori come etichette. Il modello viene invece usato per predire una stima numerica del rischio dell'evento.
+
+Il task di Machine Learning è quindi un task di regressione:
+
+\begin{quote}
+Predire \texttt{max\_risk\_estimate} a partire dalle feature fisiche e orbitali dell'evento di conjunction.
+\end{quote}
+
+\subsection{Target del modello}
+
+La variabile target scelta è:
+
+\begin{verbatim}
+max_risk_estimate
+\end{verbatim}
+
+Questa variabile rappresenta una stima del rischio massimo dell'evento. Essendo un valore numerico continuo, il problema viene trattato come un problema di regressione.
+
+\subsection{Feature di input}
+
+Il modello utilizza feature fisiche e orbitali che descrivono lo scenario tra target object e chaser object.
+
+Le feature usate sono:
+
+\begin{itemize}
+    \item \texttt{time\_to\_tca}
+    \item \texttt{miss\_distance}
+    \item \texttt{relative\_speed}
+    \item \texttt{relative\_position\_r}
+    \item \texttt{relative\_position\_t}
+    \item \texttt{relative\_position\_n}
+    \item \texttt{relative\_velocity\_r}
+    \item \texttt{relative\_velocity\_t}
+    \item \texttt{relative\_velocity\_n}
+    \item \texttt{mahalanobis\_distance}
+    \item \texttt{mission\_id}
+    \item \texttt{c\_object\_type}
+\end{itemize}
+
+Per evitare data leakage, non vengono usate come input colonne derivate dal rischio o colonne prodotte dal sistema di raccomandazione.
+
+Sono quindi escluse colonne come:
+
+\begin{itemize}
+    \item \texttt{risk}
+    \item \texttt{max\_risk\_estimate}
+    \item \texttt{collision\_probability}
+    \item \texttt{max\_collision\_probability}
+    \item \texttt{risk\_norm}
+    \item \texttt{risk\_score}
+    \item \texttt{recommended\_action}
+    \item gli action scores
+\end{itemize}
+
+Questa scelta è importante perché impedisce al modello di ricevere informazioni che contengono direttamente o indirettamente la risposta da predire.
+
+\subsection{Modelli utilizzati}
+
+Sono stati confrontati due modelli:
+
+\begin{itemize}
+    \item \texttt{DummyRegressor}
+    \item \texttt{RandomForestRegressor}
+\end{itemize}
+
+Il \texttt{DummyRegressor} viene usato come baseline. Questo modello predice sempre un valore semplice, vicino alla media del target, e serve per verificare se il modello principale riesce davvero a imparare informazioni utili dai dati.
+
+Il \texttt{RandomForestRegressor} è il modello principale. È stato scelto perché funziona bene con dati tabellari, gestisce relazioni non lineari ed è robusto per una prima versione del modulo predittivo.
+
+\subsection{Metriche di valutazione}
+
+I modelli sono stati valutati con tre metriche di regressione:
+
+\begin{itemize}
+    \item \textbf{MAE}: errore medio assoluto;
+    \item \textbf{RMSE}: radice dell'errore quadratico medio;
+    \item \textbf{R2}: quota di variabilità del target spiegata dal modello.
+\end{itemize}
+
+I risultati ottenuti sono:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lrrr}
+\toprule
+Modello & MAE & RMSE & R2 \\
+\midrule
+\texttt{DummyRegressor} & 0.8350 & 1.0488 & -0.0002 \\
+\texttt{RandomForestRegressor} & 0.3802 & 0.5213 & 0.7529 \\
+\bottomrule
+\end{tabular}
+\caption{Valutazione dei modelli di regressione per la predizione di \texttt{max\_risk\_estimate}.}
+\end{table}
+
+\subsection{Interpretazione dei risultati}
+
+Il \texttt{DummyRegressor} ha un valore di \texttt{R2} circa pari a zero. Questo indica che la baseline non spiega realmente la variabilità del target.
+
+Il \texttt{RandomForestRegressor}, invece, ottiene:
+
+\begin{verbatim}
+R2 = 0.7529
+\end{verbatim}
+
+Questo significa che il modello riesce a spiegare circa il 75\% della variabilità di \texttt{max\_risk\_estimate} nel test set.
+
+Inoltre, il modello Random Forest ottiene valori di MAE e RMSE molto più bassi rispetto alla baseline. Questo conferma che le feature fisiche e orbitali dello scenario contengono informazione utile per stimare il rischio massimo dell'evento.
+
+\subsection{Ruolo del Machine Learning nel sistema complessivo}
+
+Il modulo di Machine Learning non sostituisce il recommendation system. Il suo ruolo è stimare il rischio.
+
+La struttura complessiva del progetto diventa quindi:
+
+\begin{verbatim}
+Feature dell'evento di conjunction
+        ↓
+Modulo ML di predizione del rischio
+        ↓
+Stima di max_risk_estimate
+        ↓
+Recommendation layer spiegabile
+        ↓
+Azione raccomandata
+\end{verbatim}
+
+La raccomandazione finale continua a essere prodotta dal recommendation layer rule-based, che combina rischio, distanza, urgenza, velocità, costo sintetico e priorità missione per selezionare l'azione più adatta.
+
+% =========================
+\section{Output generati}
+% =========================
+
+La pipeline genera i seguenti output:
+
+\begin{itemize}
+    \item \texttt{outputs/tables/event\_level\_data.csv}: dataset completo processato, con colonne originali, feature ingegnerizzate, score e raccomandazioni.
+    \item \texttt{outputs/recommendations/recommendations.csv}: file pulito finale con le colonne principali della raccomandazione.
+    \item \texttt{reports/recommendation\_summary.md}: report riassuntivo con distribuzione delle raccomandazioni, percentuali, score medi ed esempi.
+    \item \texttt{reports/recommendation\_validation.md}: report di validazione descrittiva che controlla la coerenza delle raccomandazioni.
+    \item \texttt{reports/model\_evaluation.md}: report di valutazione del modello di Machine Learning per la predizione di \texttt{max\_risk\_estimate}.
+    \item \texttt{outputs/models/risk\_prediction\_model.joblib}: modello \texttt{RandomForestRegressor} addestrato e salvato.
+    \item \texttt{outputs/figures/}: grafici statici di esempio per le diverse classi di raccomandazione.
+\end{itemize}
+
+La funzione di visualizzazione genera un grafico di esempio per ogni raccomandazione disponibile:
+
+\begin{itemize}
+    \item \texttt{example\_no\_action.png}
+    \item \texttt{example\_monitor.png}
+    \item \texttt{example\_small\_maneuver.png}
+    \item \texttt{example\_major\_maneuver.png}
+\end{itemize}
+
+Queste figure sono supporti visivi. Rappresentano in modo statico la geometria relativa tra target e chaser. Non simulano propagazione orbitale, delta-v o dinamiche successive alla manovra.
+
+% =========================
+\section{Risultati}
+% =========================
+
+La distribuzione finale delle raccomandazioni è:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lrr}
+\toprule
+Azione raccomandata & Conteggio & Percentuale \\
+\midrule
+\texttt{monitor} & 10927 & 83.1393\% \\
+\texttt{major\_maneuver} & 1945 & 14.7988\% \\
+\texttt{small\_maneuver} & 209 & 1.5902\% \\
+\texttt{no\_action} & 62 & 0.4717\% \\
+\bottomrule
+\end{tabular}
+\caption{Distribuzione finale delle raccomandazioni.}
+\end{table}
+
+La raccomandazione più frequente è \texttt{monitor}. Questo indica che la maggior parte degli eventi richiede osservazione continua, ma non una manovra immediata.
+
+La raccomandazione \texttt{major\_maneuver} compare per un gruppo più piccolo ma significativo di casi ad alto rischio o alta priorità.
+
+La raccomandazione \texttt{small\_maneuver} compare in un numero inferiore di casi intermedi, dove una manovra è utile ma una manovra maggiore non è l'opzione più adatta.
+
+La raccomandazione \texttt{no\_action} compare solo per casi a rischio basso.
+
+% =========================
+\section{Validazione e interpretazione}
+% =========================
+
+Il validation report conferma che le raccomandazioni sono coerenti con la logica degli score.
+
+I valori medi delle feature per raccomandazione sono riassunti nella tabella seguente.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lrrrrrr}
+\toprule
+Azione & Risk & Fuel & Priority & Urgency & Dist. Risk & Speed Norm \\
+\midrule
+\texttt{major\_maneuver} & 0.7602 & 0.6984 & 0.7281 & 0.7893 & 0.8660 & 0.6378 \\
+\texttt{monitor} & 0.5152 & 0.6905 & 0.6611 & 0.8222 & 0.6926 & 0.6027 \\
+\texttt{no\_action} & 0.2059 & 0.2542 & 0.6089 & 0.3381 & 0.2270 & 0.1984 \\
+\texttt{small\_maneuver} & 0.7467 & 0.7721 & 0.5000 & 0.9526 & 0.8604 & 0.6517 \\
+\bottomrule
+\end{tabular}
+\caption{Valori medi delle feature per raccomandazione.}
+\end{table}
+
+La validazione mostra che:
+
+\begin{itemize}
+    \item \texttt{no\_action} ha il valore medio più basso di \texttt{risk\_score}.
+    \item \texttt{monitor} è associata a rischio intermedio.
+    \item \texttt{small\_maneuver} è associata a rischio alto e urgenza alta, ma priorità missione più bassa.
+    \item \texttt{major\_maneuver} è associata a rischio alto e priorità missione più alta.
+\end{itemize}
+
+Questo conferma che il recommender è coerente e spiegabile.
+
+% =========================
+\section{Stato attuale del sistema}
+% =========================
+
+Allo stato attuale, il progetto implementa un sistema ibrido composto da due livelli principali:
+
+\begin{itemize}
+    \item un modulo di Machine Learning per la predizione di \texttt{max\_risk\_estimate};
+    \item un recommendation layer rule-based e spiegabile per la selezione dell'azione finale.
+\end{itemize}
+
+La pipeline è completamente riproducibile tramite:
+
+\begin{verbatim}
+python3 main.py
+\end{verbatim}
+
+Eseguendo questo comando vengono generati il dataset completo, il file pulito delle raccomandazioni, il summary report, il validation report, il report di valutazione del modello ML, il modello addestrato e le visualizzazioni di esempio.
+
+Il progetto è quindi completo come prototipo interpretabile di supporto decisionale con una componente predittiva basata su Machine Learning e una componente decisionale basata su regole spiegabili.
+
+% =========================
+\section{Limiti del progetto}
+% =========================
+
+La versione attuale del progetto presenta alcuni limiti:
+
+\begin{itemize}
+    \item il recommendation layer è rule-based e progettato manualmente, mentre il modulo di Machine Learning predice una stima di rischio del dataset e non decisioni reali degli operatori;
+    \item \texttt{fuel\_cost} e \texttt{mission\_priority} sono assunzioni sintetiche;
+    \item un utilizzo operativo reale richiederebbe soglie validate, costi reali di manovra, vincoli del satellite e revisione da parte di esperti;
+    \item i pesi degli score sono progettati e calibrati manualmente;
+    \item il sistema non simula manovre orbitali;
+    \item il sistema non predice esiti reali di collisione, ma supporta la decisione;
+    \item le visualizzazioni sono statiche e non rappresentano una propagazione orbitale completa.
+\end{itemize}
+
+% =========================
+\section{Sviluppi futuri}
+% =========================
+
+Possibili sviluppi futuri includono:
+
+\begin{itemize}
+    \item migliorare il modulo di Machine Learning confrontando modelli aggiuntivi e ottimizzando gli iperparametri;
+    \item stimare il costo di manovra con calcoli reali di delta-v;
+    \item usare metadati reali sulla priorità della missione;
+    \item validare le regole di scoring con decisioni etichettate da esperti;
+    \item aggiungere una dashboard interattiva;
+    \item creare animazioni temporali usando più osservazioni dello stesso evento;
+    \item includere analisi dell'incertezza tramite feature di covarianza;
+    \item confrontare le raccomandazioni rule-based con decisioni storiche degli operatori.
+\end{itemize}
+
+% =========================
+\section{Conclusione}
+% =========================
+
+Questo progetto costruisce con successo un sistema di raccomandazione spiegabile per il supporto decisionale nella collision avoidance satellitare.
+
+Il sistema trasforma dati grezzi di conjunction in raccomandazioni a livello evento. Crea feature fisiche e operative, calcola un risk score, valuta le azioni candidate e seleziona una raccomandazione finale.
+
+Il progetto include inoltre un modulo di Machine Learning per la predizione di \texttt{max\_risk\_estimate}. Il modello predittivo utilizza feature fisiche e orbitali dello scenario per stimare il rischio massimo dell'evento. Il modello non predice direttamente l'azione finale, perché il dataset non contiene decisioni reali degli operatori come etichette.
+
+La raccomandazione finale continua a essere prodotta dal recommendation layer spiegabile, che combina rischio, distanza, urgenza, velocità, costo sintetico e priorità missione per selezionare l'azione più adatta.
+
+Il prototipo attuale produce output tabellari, report, un modello ML salvato e visualizzazioni di esempio di scenari rappresentativi. Può essere considerato una prima versione completa e interpretabile di un sistema ibrido per la collision avoidance satellitare, composto da una componente predittiva basata su Machine Learning e una componente decisionale rule-based.
+
+\end{document}
