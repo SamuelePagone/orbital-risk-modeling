@@ -1,4 +1,6 @@
-dataset
+# Dataset files
+dataset/data/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -217,3 +219,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# macOS system files
+.DS_Store
+
+# Generated project outputs
+outputs/
+
+# Python generated cache
+**/__pycache__/
+*.pyc
